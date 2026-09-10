@@ -337,7 +337,8 @@ if __name__ == "__main__":
     notification_thread.start()
 
     app.run(
-        port=8000,
-        debug=True,
-        use_reloader=False
-    )
+      host="0.0.0.0",
+    port=int(os.getenv("PORT", 8000)),
+    debug=False,
+    use_reloader=False
+)
