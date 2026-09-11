@@ -63,6 +63,7 @@ def notification_loop():
     while True:
         now = datetime.now()
 
+        # 木曜日(weekday == 3) の指定時刻に送信
         if (
             now.weekday() == 3
             and now.hour == NOTICE_HOUR
@@ -129,8 +130,9 @@ def handle_message(event):
 
     text = event.message.text
     user_id = event.source.user_id
+    today = datetime.now().strftime("%Y-%m-%d")  # 本日の日付 (例: "2026-09-11")
 
-    print(f"USER ID: {user_id}")
+    print(f"USER ID: {user_id}, DATE: {today}")
 
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
@@ -161,19 +163,23 @@ def handle_message(event):
 
         # --- 「参加」「不参加」「遅刻」 ---
         elif text in ["参加", "不参加", "遅刻"]:
+            # 「本日の日付」かつ「送信したユーザー」のレコードがあるか検索
             existing = (
                 supabase.table("attendance")
                 .select("id")
                 .eq("user_id", user_id)
+                .eq("date", today)
                 .execute()
             )
 
             if existing.data:
-                supabase.table("attendance").update({"status": text}).eq("user_id", user_id).execute()
+                # 既に本日分があればステータスを更新
+                supabase.table("attendance").update({"status": text}).eq("user_id", user_id).eq("date", today).execute()
             else:
-                supabase.table("attendance").insert({"user_id": user_id, "status": text}).execute()
+                # 本日分がなければ新規追加
+                supabase.table("attendance").insert({"user_id": user_id, "status": text, "date": today}).execute()
 
-            # プロフィール取得（失敗しても落とさない）
+            # プロフィール取得（失敗してもエラーで止めない）
             try:
                 if event.source.type == "group":
                     profile = line_bot_api.get_group_member_profile(event.source.group_id, user_id)
@@ -183,14 +189,15 @@ def handle_message(event):
             except Exception:
                 name = user_id
 
-            print(f"出欠更新: {name} → {text}")
+            print(f"出欠更新 ({today}): {name} → {text}")
 
         # --- 「人数」 ---
         elif text == "人数":
             if user_id != REPRESENTATIVE_ID:
                 return
 
-            result = supabase.table("attendance").select("status").execute()
+            # 本日の出欠状況のみを取得
+            result = supabase.table("attendance").select("status").eq("date", today).execute()
 
             counts = {"参加": 0, "不参加": 0, "遅刻": 0}
             for row in result.data:
@@ -200,7 +207,7 @@ def handle_message(event):
 
             message = TextMessage(
                 text=(
-                    "📊 現在の出欠状況\n\n"
+                    f"📊 本日({today})の出欠状況\n\n"
                     f"🟢 参加：{counts['参加']}人\n"
                     f"🔴 不参加：{counts['不参加']}人\n"
                     f"🟡 遅刻：{counts['遅刻']}人"
@@ -215,7 +222,8 @@ def handle_message(event):
             if user_id != REPRESENTATIVE_ID:
                 return
 
-            result = supabase.table("attendance").select("user_id, status").execute()
+            # 本日の出欠一覧を取得
+            result = supabase.table("attendance").select("user_id, status").eq("date", today).execute()
 
             members = {"参加": [], "不参加": [], "遅刻": []}
 
@@ -236,7 +244,7 @@ def handle_message(event):
                     members[st].append(name)
 
             message_text = (
-                "📋 出欠一覧\n\n"
+                f"📋 本日({today})の出欠一覧\n\n"
                 f"🟢 参加\n{'\n'.join(members['参加']) if members['参加'] else 'なし'}\n\n"
                 f"🔴 不参加\n{'\n'.join(members['不参加']) if members['不参加'] else 'なし'}\n\n"
                 f"🟡 遅刻\n{'\n'.join(members['遅刻']) if members['遅刻'] else 'なし'}"
