@@ -5,6 +5,7 @@ from datetime import datetime
 
 from flask import Flask, request
 from dotenv import load_dotenv
+from supabase import create_client, Client
 
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
@@ -21,9 +22,16 @@ from linebot.v3.messaging import (
 from linebot.v3.messaging.models import MessageAction
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
+
 load_dotenv()
 
+
 app = Flask(__name__)
+
+
+# =========================
+# LINE設定
+# =========================
 
 configuration = Configuration(
     access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
@@ -32,6 +40,17 @@ configuration = Configuration(
 handler = WebhookHandler(
     os.getenv("LINE_CHANNEL_SECRET")
 )
+
+
+# =========================
+# Supabase設定
+# =========================
+
+supabase: Client = create_client(
+    os.getenv("SUPABASE_URL"),
+    os.getenv("SUPABASE_SECRET_KEY")
+)
+
 
 # =========================
 # 設定
@@ -46,10 +65,6 @@ REPRESENTATIVE_ID = "U84bc6d3ffe464dd9305911304d17c8e2"
 
 # Botが入っているグループID
 group_id = "C8c3a162f8f47a2304b7f685b0da44dee"
-
-# 出欠を一時的に保存
-# user_id → {"status": "参加"}
-attendance = {}
 
 
 # =========================
@@ -156,14 +171,14 @@ def handle_message(event):
     text = event.message.text
     user_id = event.source.user_id
 
-    # 自分のLINEユーザーIDを確認するための表示
+    # ユーザーIDを確認
     print(f"USER ID: {user_id}")
 
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
 
         # =========================
-        # グループIDを保存
+        # グループIDを取得
         # =========================
 
         if event.source.type == "group":
@@ -175,6 +190,7 @@ def handle_message(event):
         # =========================
 
         if text == "予定":
+
             message = TextMessage(
                 text=(
                     "🗓 出欠を選んでください👇\n\n"
@@ -218,9 +234,35 @@ def handle_message(event):
 
         elif text in ["参加", "不参加", "遅刻"]:
 
-            attendance[user_id] = {
-                "status": text
-            }
+            # すでに登録されているか確認
+            existing = (
+                supabase
+                .table("attendance")
+                .select("id")
+                .eq("user_id", user_id)
+                .execute()
+            )
+
+            if existing.data:
+
+                # 既存の出欠を更新
+                supabase.table("attendance").update(
+                    {
+                        "status": text
+                    }
+                ).eq(
+                    "user_id", user_id
+                ).execute()
+
+            else:
+
+                # 新しい出欠を登録
+                supabase.table("attendance").insert(
+                    {
+                        "user_id": user_id,
+                        "status": text
+                    }
+                ).execute()
 
             # 名前を取得
             if event.source.type == "group":
@@ -247,15 +289,26 @@ def handle_message(event):
             if user_id != REPRESENTATIVE_ID:
                 return
 
+            # Supabaseから出欠データを取得
+            result = (
+                supabase
+                .table("attendance")
+                .select("status")
+                .execute()
+            )
+
             participant_count = 0
             absent_count = 0
             late_count = 0
 
-            for data in attendance.values():
+            for data in result.data:
+
                 if data["status"] == "参加":
                     participant_count += 1
+
                 elif data["status"] == "不参加":
                     absent_count += 1
+
                 elif data["status"] == "遅刻":
                     late_count += 1
 
@@ -285,26 +338,43 @@ def handle_message(event):
             if user_id != REPRESENTATIVE_ID:
                 return
 
+            # Supabaseから出欠データを取得
+            result = (
+                supabase
+                .table("attendance")
+                .select("user_id,status")
+                .execute()
+            )
+
             participant_names = []
             absent_names = []
             late_names = []
 
-            for member_id, data in attendance.items():
+            for data in result.data:
+
+                member_id = data["user_id"]
 
                 if event.source.type == "group":
+
                     profile = line_bot_api.get_group_member_profile(
                         event.source.group_id,
                         member_id
                     )
+
                 else:
-                    profile = line_bot_api.get_profile(member_id)
+
+                    profile = line_bot_api.get_profile(
+                        member_id
+                    )
 
                 name = profile.display_name
 
                 if data["status"] == "参加":
                     participant_names.append(name)
+
                 elif data["status"] == "不参加":
                     absent_names.append(name)
+
                 elif data["status"] == "遅刻":
                     late_names.append(name)
 
@@ -312,11 +382,23 @@ def handle_message(event):
                 text=(
                     "📋 出欠一覧\n\n"
                     "🟢 参加\n"
-                    + ("\n".join(participant_names) if participant_names else "なし")
+                    + (
+                        "\n".join(participant_names)
+                        if participant_names
+                        else "なし"
+                    )
                     + "\n\n🔴 不参加\n"
-                    + ("\n".join(absent_names) if absent_names else "なし")
+                    + (
+                        "\n".join(absent_names)
+                        if absent_names
+                        else "なし"
+                    )
                     + "\n\n🟡 遅刻\n"
-                    + ("\n".join(late_names) if late_names else "なし")
+                    + (
+                        "\n".join(late_names)
+                        if late_names
+                        else "なし"
+                    )
                 )
             )
 
@@ -339,6 +421,7 @@ if __name__ == "__main__":
         target=notification_loop,
         daemon=True
     )
+
     notification_thread.start()
 
     app.run(
