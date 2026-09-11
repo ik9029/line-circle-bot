@@ -430,10 +430,15 @@ def handle_message(event):
                         late_names.append(name)
 
 
+                # =========================
                 # 一覧メッセージ
+                # =========================
+
+                display_date = today.replace("-", "/")
+
                 message = TextMessage(
                     text=(
-                        "📋 本日の出欠一覧\n\n"
+                        f"📋 出欠一覧（{display_date}）\n\n"
 
                         "🟢 参加\n"
                         +
@@ -497,4 +502,3 @@ if __name__ == "__main__":
         debug=False,
         use_reloader=False
     )
-
