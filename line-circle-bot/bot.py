@@ -2,6 +2,7 @@ import os
 import threading
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from flask import Flask, request
 from dotenv import load_dotenv
@@ -22,58 +23,83 @@ from linebot.v3.messaging import (
 from linebot.v3.messaging.models import MessageAction
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
+
 load_dotenv()
 
+
 app = Flask(__name__)
+
 
 # =========================
 # LINE設定
 # =========================
+
 configuration = Configuration(
     access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 )
+
 handler = WebhookHandler(
     os.getenv("LINE_CHANNEL_SECRET")
 )
 
+
 # =========================
 # Supabase設定
 # =========================
+
 supabase: Client = create_client(
     os.getenv("SUPABASE_URL"),
     os.getenv("SUPABASE_SECRET_KEY")
 )
 
+
 # =========================
 # 設定
 # =========================
+
+# 日本時間
+JST = ZoneInfo("Asia/Tokyo")
+
+# 毎週木曜日の何時に出欠確認を送るか
 NOTICE_HOUR = 10
 NOTICE_MINUTE = 30
+
+# 代表のLINEユーザーID
 REPRESENTATIVE_ID = "U84bc6d3ffe464dd9305911304d17c8e2"
+
+# Botが入っているグループID
 group_id = "C8c3a162f8f47a2304b7f685b0da44dee"
 
 
 # =========================
 # 自動通知
 # =========================
+
 def notification_loop():
     global group_id
+
     last_sent_date = None
 
     while True:
-        now = datetime.now()
 
-        # 木曜日(weekday == 3) の指定時刻に送信
+        # 日本時間で現在時刻を取得
+        now = datetime.now(JST)
+
+        # 木曜日かつ指定時刻になったら送信
         if (
             now.weekday() == 3
             and now.hour == NOTICE_HOUR
             and now.minute == NOTICE_MINUTE
             and last_sent_date != now.date()
         ):
-            if group_id:
+
+            if group_id is not None:
+
                 try:
+
                     with ApiClient(configuration) as api_client:
                         line_bot_api = MessagingApi(api_client)
+
                         message = TextMessage(
                             text=(
                                 "🏸 本日のサークル出欠確認\n\n"
@@ -81,28 +107,53 @@ def notification_loop():
                             ),
                             quick_reply=QuickReply(
                                 items=[
-                                    QuickReplyItem(action=MessageAction(label="🟢 参加", text="参加")),
-                                    QuickReplyItem(action=MessageAction(label="🔴 不参加", text="不参加")),
-                                    QuickReplyItem(action=MessageAction(label="🟡 遅刻", text="遅刻")),
+                                    QuickReplyItem(
+                                        action=MessageAction(
+                                            label="🟢 参加",
+                                            text="参加"
+                                        )
+                                    ),
+                                    QuickReplyItem(
+                                        action=MessageAction(
+                                            label="🔴 不参加",
+                                            text="不参加"
+                                        )
+                                    ),
+                                    QuickReplyItem(
+                                        action=MessageAction(
+                                            label="🟡 遅刻",
+                                            text="遅刻"
+                                        )
+                                    ),
                                 ]
                             )
                         )
+
                         line_bot_api.push_message(
-                            PushMessageRequest(to=group_id, messages=[message])
+                            PushMessageRequest(
+                                to=group_id,
+                                messages=[message]
+                            )
                         )
+
                         print("木曜日の出欠確認を自動送信しました！")
-                        last_sent_date = now.date()
+
+                    last_sent_date = now.date()
+
                 except Exception as e:
-                    print(f"自動送信エラー: {e}")
+                    print(f"自動通知でエラーが発生しました: {e}")
+
             else:
                 print("グループIDがまだ取得できていません。")
 
+        # 30秒ごとに確認
         time.sleep(30)
 
 
 # =========================
 # Webhook
 # =========================
+
 @app.route("/health", methods=["GET"])
 def health():
     return "OK", 200
@@ -110,11 +161,13 @@ def health():
 
 @app.route("/callback", methods=["POST"])
 def callback():
+
     signature = request.headers.get("X-Line-Signature")
     body = request.get_data(as_text=True)
 
     try:
         handler.handle(body, signature)
+
     except InvalidSignatureError:
         return "Invalid signature", 400
 
@@ -124,25 +177,44 @@ def callback():
 # =========================
 # メッセージ処理
 # =========================
+
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
+
     global group_id
 
     text = event.message.text
     user_id = event.source.user_id
-    today = datetime.now().strftime("%Y-%m-%d")  # 本日の日付 (例: "2026-09-11")
 
-    print(f"USER ID: {user_id}, DATE: {today}")
+    # 日本時間の今日の日付
+    today = datetime.now(JST).date().isoformat()
+
+    # ユーザーIDを確認
+    print(f"USER ID: {user_id}")
+    print(f"今日の日付: {today}")
 
     with ApiClient(configuration) as api_client:
+
         line_bot_api = MessagingApi(api_client)
 
-        if event.source.type == "group":
-            group_id = event.source.group_id
-            print(f"グループIDを取得しました: {group_id}")
+        # =========================
+        # グループIDを取得
+        # =========================
 
-        # --- 「予定」 ---
+        if event.source.type == "group":
+
+            group_id = event.source.group_id
+
+            print(
+                f"グループIDを取得しました: {group_id}"
+            )
+
+        # =========================
+        # 「予定」
+        # =========================
+
         if text == "予定":
+
             message = TextMessage(
                 text=(
                     "🗓 出欠を選んでください👇\n\n"
@@ -151,115 +223,272 @@ def handle_message(event):
                 ),
                 quick_reply=QuickReply(
                     items=[
-                        QuickReplyItem(action=MessageAction(label="🟢 参加", text="参加")),
-                        QuickReplyItem(action=MessageAction(label="🔴 不参加", text="不参加")),
-                        QuickReplyItem(action=MessageAction(label="🟡 遅刻", text="遅刻")),
+                        QuickReplyItem(
+                            action=MessageAction(
+                                label="🟢 参加",
+                                text="参加"
+                            )
+                        ),
+                        QuickReplyItem(
+                            action=MessageAction(
+                                label="🔴 不参加",
+                                text="不参加"
+                            )
+                        ),
+                        QuickReplyItem(
+                            action=MessageAction(
+                                label="🟡 遅刻",
+                                text="遅刻"
+                            )
+                        ),
                     ]
                 )
             )
+
             line_bot_api.reply_message(
-                ReplyMessageRequest(reply_token=event.reply_token, messages=[message])
-            )
-
-        # --- 「参加」「不参加」「遅刻」 ---
-        elif text in ["参加", "不参加", "遅刻"]:
-            # 「本日の日付」かつ「送信したユーザー」のレコードがあるか検索
-            existing = (
-                supabase.table("attendance")
-                .select("id")
-                .eq("user_id", user_id)
-                .eq("date", today)
-                .execute()
-            )
-
-            if existing.data:
-                # 既に本日分があればステータスを更新
-                supabase.table("attendance").update({"status": text}).eq("user_id", user_id).eq("date", today).execute()
-            else:
-                # 本日分がなければ新規追加
-                supabase.table("attendance").insert({"user_id": user_id, "status": text, "date": today}).execute()
-
-            # プロフィール取得（失敗してもエラーで止めない）
-            try:
-                if event.source.type == "group":
-                    profile = line_bot_api.get_group_member_profile(event.source.group_id, user_id)
-                else:
-                    profile = line_bot_api.get_profile(user_id)
-                name = profile.display_name
-            except Exception:
-                name = user_id
-
-            print(f"出欠更新 ({today}): {name} → {text}")
-
-        # --- 「人数」 ---
-        elif text == "人数":
-            if user_id != REPRESENTATIVE_ID:
-                return
-
-            # 本日の出欠状況のみを取得
-            result = supabase.table("attendance").select("status").eq("date", today).execute()
-
-            counts = {"参加": 0, "不参加": 0, "遅刻": 0}
-            for row in result.data:
-                st = row.get("status")
-                if st in counts:
-                    counts[st] += 1
-
-            message = TextMessage(
-                text=(
-                    f"📊 本日({today})の出欠状況\n\n"
-                    f"🟢 参加：{counts['参加']}人\n"
-                    f"🔴 不参加：{counts['不参加']}人\n"
-                    f"🟡 遅刻：{counts['遅刻']}人"
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[message]
                 )
             )
-            line_bot_api.reply_message(
-                ReplyMessageRequest(reply_token=event.reply_token, messages=[message])
-            )
 
-        # --- 「一覧」 ---
-        elif text == "一覧":
+
+        # =========================
+        # 「参加」「不参加」「遅刻」
+        # =========================
+
+        elif text in ["参加", "不参加", "遅刻"]:
+
+            try:
+
+                # user_id + event_date をキーにして登録・更新
+                supabase.table("attendance").upsert(
+                    {
+                        "user_id": user_id,
+                        "status": text,
+                        "event_date": today,
+                    },
+                    on_conflict="user_id,event_date"
+                ).execute()
+
+                # 名前を取得
+                if event.source.type == "group":
+
+                    profile = line_bot_api.get_group_member_profile(
+                        event.source.group_id,
+                        user_id
+                    )
+
+                else:
+
+                    profile = line_bot_api.get_profile(
+                        user_id
+                    )
+
+                name = profile.display_name
+
+                print(
+                    f"出欠更新: {name} → {text} "
+                    f"({today})"
+                )
+
+            except Exception as e:
+
+                print(
+                    f"出欠登録でエラーが発生しました: {e}"
+                )
+
+
+        # =========================
+        # 「人数」
+        # =========================
+
+        elif text == "人数":
+
+            # 代表以外には何もしない
             if user_id != REPRESENTATIVE_ID:
                 return
 
-            # 本日の出欠一覧を取得
-            result = supabase.table("attendance").select("user_id, status").eq("date", today).execute()
+            try:
 
-            members = {"参加": [], "不参加": [], "遅刻": []}
+                # 今日の出欠だけ取得
+                result = (
+                    supabase
+                    .table("attendance")
+                    .select("status")
+                    .eq("event_date", today)
+                    .execute()
+                )
 
-            for row in result.data:
-                member_id = row["user_id"]
-                st = row.get("status")
+                participant_count = 0
+                absent_count = 0
+                late_count = 0
 
-                try:
-                    if event.source.type == "group":
-                        profile = line_bot_api.get_group_member_profile(event.source.group_id, member_id)
-                    else:
-                        profile = line_bot_api.get_profile(member_id)
-                    name = profile.display_name
-                except Exception:
-                    name = f"ユーザー({member_id[:6]}...)"
+                for data in result.data:
 
-                if st in members:
-                    members[st].append(name)
+                    if data["status"] == "参加":
+                        participant_count += 1
 
-            message_text = (
-                f"📋 本日({today})の出欠一覧\n\n"
-                f"🟢 参加\n{'\n'.join(members['参加']) if members['参加'] else 'なし'}\n\n"
-                f"🔴 不参加\n{'\n'.join(members['不参加']) if members['不参加'] else 'なし'}\n\n"
-                f"🟡 遅刻\n{'\n'.join(members['遅刻']) if members['遅刻'] else 'なし'}"
-            )
+                    elif data["status"] == "不参加":
+                        absent_count += 1
 
-            line_bot_api.reply_message(
-                ReplyMessageRequest(reply_token=event.reply_token, messages=[TextMessage(text=message_text)])
-            )
+                    elif data["status"] == "遅刻":
+                        late_count += 1
+
+                message = TextMessage(
+                    text=(
+                        "📊 本日の出欠状況\n\n"
+                        f"🟢 参加：{participant_count}人\n"
+                        f"🔴 不参加：{absent_count}人\n"
+                        f"🟡 遅刻：{late_count}人"
+                    )
+                )
+
+                line_bot_api.reply_message(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[message]
+                    )
+                )
+
+            except Exception as e:
+
+                print(
+                    f"人数取得でエラーが発生しました: {e}"
+                )
+
+
+        # =========================
+        # 「一覧」
+        # =========================
+
+        elif text == "一覧":
+
+            # 代表以外には何もしない
+            if user_id != REPRESENTATIVE_ID:
+                return
+
+            try:
+
+                # 今日の出欠だけ取得
+                result = (
+                    supabase
+                    .table("attendance")
+                    .select("user_id,status")
+                    .eq("event_date", today)
+                    .execute()
+                )
+
+                participant_names = []
+                absent_names = []
+                late_names = []
+
+                for data in result.data:
+
+                    member_id = data["user_id"]
+
+                    try:
+
+                        if event.source.type == "group":
+
+                            profile = (
+                                line_bot_api
+                                .get_group_member_profile(
+                                    event.source.group_id,
+                                    member_id
+                                )
+                            )
+
+                        else:
+
+                            profile = (
+                                line_bot_api
+                                .get_profile(member_id)
+                            )
+
+                        name = profile.display_name
+
+                    except Exception as e:
+
+                        print(
+                            f"名前取得エラー: {member_id} / {e}"
+                        )
+
+                        # 名前が取得できない場合
+                        name = f"ユーザー({member_id[:8]}...)"
+
+                    if data["status"] == "参加":
+
+                        participant_names.append(name)
+
+                    elif data["status"] == "不参加":
+
+                        absent_names.append(name)
+
+                    elif data["status"] == "遅刻":
+
+                        late_names.append(name)
+
+
+                # 一覧メッセージ
+                message = TextMessage(
+                    text=(
+                        "📋 本日の出欠一覧\n\n"
+
+                        "🟢 参加\n"
+                        +
+                        (
+                            "\n".join(participant_names)
+                            if participant_names
+                            else "なし"
+                        )
+
+                        + "\n\n🔴 不参加\n"
+
+                        +
+                        (
+                            "\n".join(absent_names)
+                            if absent_names
+                            else "なし"
+                        )
+
+                        + "\n\n🟡 遅刻\n"
+
+                        +
+                        (
+                            "\n".join(late_names)
+                            if late_names
+                            else "なし"
+                        )
+                    )
+                )
+
+                line_bot_api.reply_message(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[message]
+                    )
+                )
+
+            except Exception as e:
+
+                print(
+                    f"一覧取得でエラーが発生しました: {e}"
+                )
 
 
 # =========================
 # Bot起動
 # =========================
+
 if __name__ == "__main__":
-    notification_thread = threading.Thread(target=notification_loop, daemon=True)
+
+    # 自動通知用スレッドを開始
+    notification_thread = threading.Thread(
+        target=notification_loop,
+        daemon=True
+    )
+
     notification_thread.start()
 
     app.run(
@@ -268,3 +497,4 @@ if __name__ == "__main__":
         debug=False,
         use_reloader=False
     )
+
