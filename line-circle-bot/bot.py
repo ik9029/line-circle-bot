@@ -45,7 +45,7 @@ NOTICE_MINUTE =30
 REPRESENTATIVE_ID = "U84bc6d3ffe464dd9305911304d17c8e2"
 
 # Botが入っているグループID
-group_id = ""
+group_id = "C8c3a162f8f47a2304b7f685b0da44dee"
 
 # 出欠を一時的に保存
 # user_id → {"status": "参加"}
