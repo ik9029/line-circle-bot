@@ -39,7 +39,7 @@ handler = WebhookHandler(
 
 # 毎週木曜日の何時に出欠確認を送るか
 NOTICE_HOUR = 10
-NOTICE_MINUTE = 30
+NOTICE_MINUTE =30
 
 # 代表のLINEユーザーID
 REPRESENTATIVE_ID = "U84bc6d3ffe464dd9305911304d17c8e2"
@@ -126,11 +126,6 @@ def notification_loop():
 # =========================
 # Webhook
 # =========================
-
-@app.route("/health", methods=["GET"])
-def health():
-    return "OK", 200
-
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -342,9 +337,8 @@ if __name__ == "__main__":
     notification_thread.start()
 
     app.run(
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", 8000)),
-        debug=False,
-        use_reloader=False
-    )
-
+      host="0.0.0.0",
+    port=int(os.getenv("PORT", 8000)),
+    debug=False,
+    use_reloader=False
+)
